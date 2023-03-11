@@ -35,16 +35,3 @@ def generate_path(duration, mask):
     path = path - torch.nn.functional.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]))[:, :-1]
     path = path * mask
     return path
-
-
-def positional_encoding(size, lengths, w=1):
-    pe = torch.zeros(size)
-    channel = pe.size(1)
-    for i, length in enumerate(lengths):
-        enc = torch.FloatTensor(length, channel)
-        rows = torch.arange(length, out = torch.FloatTensor())[:, None]
-        cols = 2 * torch.arange(channel // 2, out = torch.FloatTensor())
-        enc[:, 0::2] = torch.sin(w * rows / (10.0 ** 4 ** (cols / channel)))
-        enc[:, 1::2] = torch.cos(w * rows / (10.0 ** 4 ** (cols / channel)))
-        pe[i, :, :length] = torch.transpose(enc, 0, 1)
-    return pe

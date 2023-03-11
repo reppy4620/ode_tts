@@ -306,10 +306,12 @@ class Unet(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, channels, dim, dim_mults) -> None:
+    def __init__(self, channels, dim, dim_mults, mel_dim) -> None:
         super().__init__()
-        self.unet = Unet(dim, channels=channels, dim_mults=dim_mults)
+        self.mel_dim = mel_dim
+
         self.scale = 2 ** (len(dim_mults) - 1)
+        self.unet = Unet(dim, channels=channels, dim_mults=dim_mults)
 
     @torch.no_grad()
     def forward(self, x_0, mask, method='RK45'):
@@ -323,7 +325,7 @@ class Decoder(nn.Module):
             v = self.unet(x_t, t, mask, x_self_cond=x_0)
             return v.cpu().numpy().reshape((-1,)).astype(np.float64)
         
-        res = solve_ivp(ode_func, (0, 1.), x.reshape((-1,)).cpu().numpy(), method=method)
+        res = solve_ivp(ode_func, (0., 1.), x_0.reshape((-1,)).cpu().numpy(), method=method)
         x = torch.tensor(res.y[:, -1], device=device).reshape(shape)
         return x
 
@@ -332,5 +334,5 @@ class Decoder(nn.Module):
         x_t = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
         v = self.unet(x_t, t, mask, x_self_cond=x_0)
         target = x_1 - x_0
-        loss = F.mse_loss(v, target)
+        loss = torch.sum((v - target) ** 2 * mask) / self.mel_dim / mask.sum()
         return loss

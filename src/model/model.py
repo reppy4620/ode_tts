@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from .encoder import Encoder
 from .decoder import Decoder
 from .predictors import DurationPredictor
-from .utils import sequence_mask, generate_path, positional_encoding
+from .utils import sequence_mask, generate_path
 
 
 class TTSModel(nn.Module):
@@ -18,7 +18,7 @@ class TTSModel(nn.Module):
         
         self.encoder = Encoder(**config.encoder)
         self.duration_predictor = DurationPredictor(**config.dp)
-        self.decoder = Decoder(**config.decoder)
+        self.decoder = Decoder(**config.decoder, mel_dim=self.mel_dim)
 
     @torch.no_grad()
     def forward(self, x, x_lengths):
@@ -31,13 +31,11 @@ class TTSModel(nn.Module):
         path_mask = x_mask.unsqueeze(-1) * y_mask.unsqueeze(2)
         attn_path = generate_path(duration.squeeze(1), path_mask.squeeze(1))
         m = x @ attn_path
-        x = m + positional_encoding(m.size(), y_lengths).to(x)
         y_lengths_max = (y_lengths.max() // self.decoder.scale) * self.decoder.scale
-        x = x[..., :y_lengths_max]
         m = m[..., :y_lengths_max]
         y_mask = y_mask[..., :y_lengths_max]
-        o = self.decoder(x.unsqueeze(1), m.unsqueeze(1), y_mask.unsqueeze(1))
-        return o
+        o = self.decoder(m.unsqueeze(1), y_mask.unsqueeze(1))
+        return o, m
 
     def compute_loss(self, batch):
         (
@@ -74,7 +72,7 @@ class TTSModel(nn.Module):
             y_mask_cut[i, :, :cut_length] = y_mask[i, :, l:u]
 
         flow_loss = self.decoder.compute_loss(m_cut.unsqueeze(1), y_cut.unsqueeze(1), y_mask_cut.unsqueeze(1))
-        mel_loss = F.mse_loss(m, y, reduction='sum') / self.mel_dim / y_lengths.sum()
+        mel_loss = (0.5 * (y - m) ** 2).sum() / self.mel_dim / y_lengths.sum()
         log_duration = torch.log(1e-5 + duration) * x_mask
         duration_loss = F.mse_loss(duration_pred, log_duration, reduction='sum') / x_lengths.sum()
         loss = mel_loss + duration_loss + flow_loss
