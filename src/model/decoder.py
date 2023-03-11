@@ -1,9 +1,8 @@
 import math
-import random
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn, einsum
+from torch import nn
 from functools import partial
 from inspect import isfunction
 from einops import rearrange, reduce
@@ -312,20 +311,15 @@ class Decoder(nn.Module):
         self.unet = Unet(dim, channels=channels, dim_mults=dim_mults)
         self.scale = 2 ** (len(dim_mults) - 1)
 
-    def beta_t(self, t, beta_0=0.02, beta_1=0.001):
-        return beta_0 + (beta_1 - beta_0) * t
-
     @torch.no_grad()
     def forward(self, x_0, mask, method='RK45'):
         device = x_0.device
         shape = x_0.shape
         b = x_0.shape[0]
 
-        def ode_func(t, x):
+        def ode_func(t, x_t):
             t = torch.full(size=(b,), fill_value=t, device=device, dtype=torch.float).reshape((b,))
-            mean = torch.tensor(x, device=device, dtype=torch.float).reshape(shape)
-            std = self.beta_t(t)[:, None, None, None]
-            x_t = mean + std * torch.randn_like(mean)
+            x_t = torch.tensor(x_t, device=device, dtype=torch.float).reshape(shape)
             v = self.unet(x_t, t, mask, x_self_cond=x_0)
             return v.cpu().numpy().reshape((-1,)).astype(np.float64)
         
@@ -335,9 +329,7 @@ class Decoder(nn.Module):
 
     def compute_loss(self, x_0, x_1, mask):
         t = torch.empty((x_1.shape[0],), device=x_1.device).uniform_(0, 1)
-        mean = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
-        std = self.beta_t(t)[:, None, None, None]
-        x_t = mean + std * torch.randn_like(mean)
+        x_t = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
         v = self.unet(x_t, t, mask, x_self_cond=x_0)
         target = x_1 - x_0
         loss = F.mse_loss(v, target)
