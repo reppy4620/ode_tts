@@ -179,27 +179,19 @@ class Unet(nn.Module):
     def __init__(
         self,
         dim,
-        init_dim=None,
-        out_dim=None,
         dim_mults=(1, 2, 4, 8),
-        channels=3,
-        self_condition=False,
-        resnet_block_groups=4,
+        channels=1,
     ):
         super().__init__()
 
         # determine dimensions
         self.channels = channels
-        self.self_condition = self_condition
-        input_channels = channels * (2 if self_condition else 1)
+        input_channels = channels * 2
 
-        init_dim = default(init_dim, dim)
-        self.init_conv = nn.Conv2d(input_channels, init_dim, 1, padding=0) # changed to 1 and 0 from 7,3
+        self.init_conv = nn.Conv2d(input_channels, dim, 1, padding=0) # changed to 1 and 0 from 7,3
 
-        dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
+        dims = [dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
-
-        block_klass = partial(ResnetBlock, groups=resnet_block_groups)
 
         # time embeddings
         time_dim = dim * 4
@@ -222,8 +214,8 @@ class Unet(nn.Module):
             self.downs.append(
                 nn.ModuleList(
                     [
-                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
-                        block_klass(dim_in, dim_in, time_emb_dim=time_dim),
+                        ResnetBlock(dim_in, dim_in, time_emb_dim=time_dim),
+                        ResnetBlock(dim_in, dim_in, time_emb_dim=time_dim),
                         Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                         Downsample(dim_in, dim_out)
                         if not is_last
@@ -233,9 +225,9 @@ class Unet(nn.Module):
             )
 
         mid_dim = dims[-1]
-        self.mid_block1 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block1 = ResnetBlock(mid_dim, mid_dim, time_emb_dim=time_dim)
         self.mid_attn = Residual(PreNorm(mid_dim, LinearAttention(mid_dim)))
-        self.mid_block2 = block_klass(mid_dim, mid_dim, time_emb_dim=time_dim)
+        self.mid_block2 = ResnetBlock(mid_dim, mid_dim, time_emb_dim=time_dim)
 
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out)):
             is_last = ind == (len(in_out) - 1)
@@ -243,8 +235,8 @@ class Unet(nn.Module):
             self.ups.append(
                 nn.ModuleList(
                     [
-                        block_klass(dim_out + dim_in, dim_out, time_emb_dim=time_dim),
-                        block_klass(dim_out + dim_in, dim_out, time_emb_dim=time_dim),
+                        ResnetBlock(dim_out + dim_in, dim_out, time_emb_dim=time_dim),
+                        ResnetBlock(dim_out + dim_in, dim_out, time_emb_dim=time_dim),
                         Residual(PreNorm(dim_out, LinearAttention(dim_out))),
                         Upsample(dim_out, dim_in)
                         if not is_last
@@ -253,15 +245,13 @@ class Unet(nn.Module):
                 )
             )
 
-        self.out_dim = default(out_dim, channels)
+        self.out_dim = channels
 
-        self.final_res_block = block_klass(dim * 2, dim, time_emb_dim=time_dim)
+        self.final_res_block = ResnetBlock(dim * 2, dim, time_emb_dim=time_dim)
         self.final_conv = nn.Conv2d(dim, self.out_dim, 1)
 
-    def forward(self, x, time, mask, x_self_cond=None):
-        if self.self_condition:
-            x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
-            x = torch.cat((x_self_cond, x), dim=1)
+    def forward(self, x_t, x_0, time, mask):
+        x = torch.cat((x_t, x_0), dim=1)
 
         x = self.init_conv(x)
         r = x.clone()
@@ -322,7 +312,7 @@ class Decoder(nn.Module):
         def ode_func(t, x_t):
             t = torch.full(size=(b,), fill_value=t, device=device, dtype=torch.float).reshape((b,))
             x_t = torch.tensor(x_t, device=device, dtype=torch.float).reshape(shape)
-            v = self.unet(x_t, t, mask, x_self_cond=x_0)
+            v = self.unet(x_t, x_0, t, mask)
             return v.cpu().numpy().reshape((-1,)).astype(np.float64)
         
         res = solve_ivp(ode_func, (0., 1.), x_0.reshape((-1,)).cpu().numpy(), method=method)
@@ -332,7 +322,7 @@ class Decoder(nn.Module):
     def compute_loss(self, x_0, x_1, mask):
         t = torch.empty((x_1.shape[0],), device=x_1.device).uniform_(0, 1)
         x_t = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
-        v = self.unet(x_t, t, mask, x_self_cond=x_0)
+        v = self.unet(x_t, x_0, t, mask)
         target = x_1 - x_0
         loss = torch.sum((v - target) ** 2 * mask) / self.mel_dim / mask.sum()
         return loss
