@@ -1,8 +1,8 @@
 import math
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch import nn
 from functools import partial
 from inspect import isfunction
 from einops import rearrange, reduce
@@ -18,15 +18,6 @@ def default(val, d):
     if exists(val):
         return val
     return d() if isfunction(d) else d
-
-
-def num_to_groups(num, divisor):
-    groups = num // divisor
-    remainder = num % divisor
-    arr = [divisor] * groups
-    if remainder > 0:
-        arr.append(remainder)
-    return arr
 
 
 class Residual(nn.Module):
@@ -188,7 +179,7 @@ class Unet(nn.Module):
         self.channels = channels
         input_channels = channels * 2
 
-        self.init_conv = nn.Conv2d(input_channels, dim, 1, padding=0) # changed to 1 and 0 from 7,3
+        self.init_conv = nn.Conv2d(input_channels, dim, 1)
 
         dims = [dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -250,8 +241,8 @@ class Unet(nn.Module):
         self.final_res_block = ResnetBlock(dim * 2, dim, time_emb_dim=time_dim)
         self.final_conv = nn.Conv2d(dim, self.out_dim, 1)
 
-    def forward(self, x_t, x_0, time, mask):
-        x = torch.cat((x_t, x_0), dim=1)
+    def forward(self, x, mu, time, mask):
+        x = torch.cat((x, mu), dim=1)
 
         x = self.init_conv(x)
         r = x.clone()
@@ -299,8 +290,8 @@ class Decoder(nn.Module):
     def __init__(self, channels, dim, dim_mults, mel_dim) -> None:
         super().__init__()
         self.mel_dim = mel_dim
-
         self.scale = 2 ** (len(dim_mults) - 1)
+
         self.unet = Unet(dim, channels=channels, dim_mults=dim_mults)
 
     @torch.no_grad()
@@ -310,7 +301,7 @@ class Decoder(nn.Module):
         b = x_0.shape[0]
 
         def ode_func(t, x_t):
-            t = torch.full(size=(b,), fill_value=t, device=device, dtype=torch.float).reshape((b,))
+            t = torch.full(size=(b,), fill_value=t, device=device, dtype=torch.float)
             x_t = torch.tensor(x_t, device=device, dtype=torch.float).reshape(shape)
             v = self.unet(x_t, x_0, t, mask)
             return v.cpu().numpy().reshape((-1,)).astype(np.float64)
@@ -321,7 +312,9 @@ class Decoder(nn.Module):
 
     def compute_loss(self, x_0, x_1, mask):
         t = torch.empty((x_1.shape[0],), device=x_1.device).uniform_(0, 1)
-        x_t = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
+        mean = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
+        std = 0.1
+        x_t = mean + std * torch.randn_like(mean)
         v = self.unet(x_t, x_0, t, mask)
         target = x_1 - x_0
         loss = torch.sum((v - target) ** 2 * mask) / self.mel_dim / mask.sum()
