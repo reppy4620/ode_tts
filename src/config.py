@@ -7,9 +7,9 @@ class DotDict(dict):
 
 
 train = DotDict(
-    num_epoch=1000,
+    num_epoch=100,
     batch_size=32,
-    save_interval=100
+    save_interval=50
 )
 
 mel_dim = 80

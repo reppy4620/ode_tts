@@ -312,9 +312,7 @@ class Decoder(nn.Module):
 
     def compute_loss(self, x_0, x_1, mask):
         t = torch.empty((x_1.shape[0],), device=x_1.device).uniform_(0, 1)
-        mean = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
-        std = 0.1
-        x_t = mean + std * torch.randn_like(mean)
+        x_t = t[:, None, None, None] * x_1 + (1 - t[:, None, None, None]) * x_0
         v = self.unet(x_t, x_0, t, mask)
         target = x_1 - x_0
         loss = torch.sum((v - target) ** 2 * mask) / self.mel_dim / mask.sum()

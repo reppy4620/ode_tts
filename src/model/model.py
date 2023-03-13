@@ -34,8 +34,7 @@ class TTSModel(nn.Module):
         y_lengths_max = (y_lengths.max() // self.decoder.scale) * self.decoder.scale
         m = m[..., :y_lengths_max]
         y_mask = y_mask[..., :y_lengths_max]
-        x = m + torch.randn_like(m)
-        o = self.decoder(x.unsqueeze(1), m.unsqueeze(1), y_mask.unsqueeze(1))
+        o = self.decoder(m.unsqueeze(1), y_mask.unsqueeze(1))
         return o, m
 
     def compute_loss(self, batch):
